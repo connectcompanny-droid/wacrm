@@ -111,13 +111,24 @@ export async function POST(request: Request) {
     // WhatsApp config + access token. Account-scoped post-multi-user.
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token')
+      .select('provider, phone_number_id, access_token')
       .eq('account_id', accountId)
       .single();
 
     if (configError || !config) {
       return NextResponse.json(
         { error: 'WhatsApp not configured.' },
+        { status: 400 },
+      );
+    }
+
+    // Reactions are Meta Cloud API-only for now — Evolution/Baileys
+    // reports/consumes reactions through a different event shape that
+    // isn't wired up yet (see IWhatsAppProvider, which intentionally
+    // has no sendReaction method).
+    if (config.provider === 'evolution' || !config.phone_number_id || !config.access_token) {
+      return NextResponse.json(
+        { error: 'Reactions are not yet supported for Evolution API connections.' },
         { status: 400 },
       );
     }

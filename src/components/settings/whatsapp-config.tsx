@@ -35,6 +35,7 @@ const MASKED_TOKEN = '••••••••••••••••';
 
 type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
+type ConnectionMethod = 'meta' | 'evolution';
 
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
@@ -69,6 +70,14 @@ export function WhatsAppConfig() {
   const [verifyToken, setVerifyToken] = useState('');
   const [pin, setPin] = useState('');
   const [tokenEdited, setTokenEdited] = useState(false);
+
+  // Which connection backend the panel is showing — defaults to the
+  // provider of the saved config once it loads (see fetchConfig), or
+  // 'meta' when there's nothing saved yet.
+  const [connectionMethod, setConnectionMethod] = useState<ConnectionMethod>('meta');
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [evolutionInstanceName, setEvolutionInstanceName] = useState<string | null>(null);
 
   // True once /register has succeeded on Meta's side (timestamp set
   // in the row). When false, the saved config is metadata-only and
@@ -121,6 +130,8 @@ export function WhatsAppConfig() {
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+        setConnectionMethod(data.provider === 'evolution' ? 'evolution' : 'meta');
+        setEvolutionInstanceName(data.evolution_instance_name ?? null);
       } else {
         setConfig(null);
         setPhoneNumberId('');
@@ -129,9 +140,11 @@ export function WhatsAppConfig() {
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+        setEvolutionInstanceName(null);
       }
       // Clear any stale probe result when reloading the row.
       setRegistrationProbe(null);
+      setQrCode(null);
 
       // Then verify health via the API (decrypts token + pings Meta)
       if (data) {
@@ -307,6 +320,70 @@ export function WhatsAppConfig() {
     }
   }
 
+  async function handleGenerateQr() {
+    try {
+      setQrLoading(true);
+      const res = await fetch('/api/whatsapp/evolution/instance', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to generate QR code');
+        return;
+      }
+      setQrCode(data.qrcode_base64);
+      setEvolutionInstanceName(data.instance_name);
+      setConnectionStatus('disconnected');
+    } catch (err) {
+      console.error('Generate QR error:', err);
+      toast.error('Failed to generate QR code');
+    } finally {
+      setQrLoading(false);
+    }
+  }
+
+  async function handleRefreshQr() {
+    try {
+      setQrLoading(true);
+      const res = await fetch('/api/whatsapp/evolution/instance', { method: 'GET' });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to refresh QR code');
+        return;
+      }
+      setQrCode(data.qrcode_base64);
+    } catch (err) {
+      console.error('Refresh QR error:', err);
+      toast.error('Failed to refresh QR code');
+    } finally {
+      setQrLoading(false);
+    }
+  }
+
+  // While a QR is on screen and not yet scanned, poll the generic
+  // health-check endpoint (branches to the Evolution connectionState
+  // check server-side) so the UI flips to "Connected" on its own once
+  // the phone finishes linking — no manual "Test Connection" click
+  // needed, matching how WhatsApp Web itself behaves.
+  useEffect(() => {
+    if (connectionMethod !== 'evolution' || !qrCode || connectionStatus === 'connected') {
+      return;
+    }
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/whatsapp/config', { method: 'GET' });
+        const payload = await res.json();
+        if (payload.connected) {
+          setConnectionStatus('connected');
+          setQrCode(null);
+          toast.success('WhatsApp connected via QR code!');
+          if (accountId) fetchConfig(accountId);
+        }
+      } catch {
+        // Transient network hiccup — keep polling silently.
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [connectionMethod, qrCode, connectionStatus, accountId, fetchConfig]);
+
   async function handleVerifyRegistration() {
     setVerifyingRegistration(true);
     setRegistrationProbe(null);
@@ -431,6 +508,37 @@ export function WhatsAppConfig() {
           </Alert>
         )}
 
+        {/* Connection method toggle */}
+        <div>
+          <div className="inline-flex rounded-lg border border-border bg-muted p-1">
+            <button
+              type="button"
+              onClick={() => setConnectionMethod('meta')}
+              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                connectionMethod === 'meta'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t('methodMeta')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConnectionMethod('evolution')}
+              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                connectionMethod === 'evolution'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t('methodEvolution')}
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {connectionMethod === 'meta' ? t('methodMetaDesc') : t('methodEvolutionDesc')}
+          </p>
+        </div>
+
         {/* Connection Status */}
         <Alert className="bg-card border-border">
           <div className="flex items-center gap-2">
@@ -456,7 +564,7 @@ export function WhatsAppConfig() {
             without a successful /register call the number won't
             receive inbound events. Surface this dimension separately
             so users don't trust a misleading green banner. */}
-        {config && (
+        {config && connectionMethod === 'meta' && (
           <Alert
             className={
               isRegistered
@@ -555,6 +663,7 @@ export function WhatsAppConfig() {
         )}
 
         {/* API Credentials */}
+        {connectionMethod === 'meta' && (
         <Card>
           <CardHeader>
             <CardTitle className="text-foreground">{t('apiCredentialsTitle')}</CardTitle>
@@ -652,8 +761,10 @@ export function WhatsAppConfig() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Webhook URL */}
+        {connectionMethod === 'meta' && (
         <Card>
           <CardHeader>
             <CardTitle className="text-foreground">{t('webhookTitle')}</CardTitle>
@@ -682,9 +793,85 @@ export function WhatsAppConfig() {
             </div>
           </CardContent>
         </Card>
+        )}
+
+        {/* QR Code (Evolution API) connection */}
+        {connectionMethod === 'evolution' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-foreground">{t('qrTitle')}</CardTitle>
+            <CardDescription className="text-muted-foreground">
+              {t('qrDesc')}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Alert className="bg-amber-950/30 border-amber-700/40">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="size-4 text-amber-400 mt-0.5 shrink-0" />
+                <AlertDescription className="text-amber-100/80 text-xs leading-relaxed">
+                  {t('qrDisclaimer')}
+                </AlertDescription>
+              </div>
+            </Alert>
+
+            {connectionStatus === 'connected' ? (
+              <div className="flex items-center gap-2 text-emerald-400 text-sm">
+                <CheckCircle2 className="size-4" />
+                {t('qrConnected')}
+              </div>
+            ) : qrCode ? (
+              <div className="flex flex-col items-center gap-3">
+                {/* eslint-disable-next-line @next/next/no-img-element -- base64 data URI, not a static asset */}
+                <img
+                  src={`data:image/png;base64,${qrCode}`}
+                  alt="WhatsApp QR code"
+                  className="size-56 rounded border border-border bg-white p-2"
+                />
+                <p className="text-xs text-muted-foreground">{t('qrWaitingForScan')}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRefreshQr}
+                  disabled={qrLoading}
+                  className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+                >
+                  {qrLoading ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="size-3.5" />
+                  )}
+                  {t('qrRefresh')}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                onClick={handleGenerateQr}
+                disabled={qrLoading}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground"
+              >
+                {qrLoading ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    {t('qrGenerating')}
+                  </>
+                ) : (
+                  t('qrGenerate')
+                )}
+              </Button>
+            )}
+
+            {evolutionInstanceName && (
+              <p className="text-xs text-muted-foreground">
+                {t('qrInstanceLabel')}: <code>{evolutionInstanceName}</code>
+              </p>
+            )}
+          </CardContent>
+        </Card>
+        )}
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3">
+          {connectionMethod === 'meta' && (
           <Button
             onClick={handleSave}
             disabled={saving}
@@ -699,6 +886,8 @@ export function WhatsAppConfig() {
               t('saveConfig')
             )}
           </Button>
+          )}
+          {connectionMethod === 'meta' && (
           <Button
             variant="outline"
             onClick={handleTestConnection}
@@ -717,6 +906,7 @@ export function WhatsAppConfig() {
               </>
             )}
           </Button>
+          )}
           {config && (
             <Button
               variant="outline"

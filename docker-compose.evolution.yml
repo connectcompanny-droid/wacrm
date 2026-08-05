@@ -1,0 +1,82 @@
+# ============================================================
+# Self-hosted Evolution API — QR-code WhatsApp connection.
+#
+# Optional. Only needed if you want the "Connect via QR Code" option
+# in wacrm's WhatsApp settings, as an alternative to the official Meta
+# Cloud API. Evolution API wraps Baileys (an unofficial WhatsApp Web
+# client) behind a REST API + webhooks — see
+# https://doc.evolution-api.com/ for full docs, this file targets the
+# v2 image as of 2025; check the docs for the current env var set if
+# something doesn't come up.
+#
+# Usage:
+#   1. Set a strong AUTHENTICATION_API_KEY below (or via a .env file
+#      next to this compose file — do NOT commit real secrets).
+#   2. docker compose -f docker-compose.evolution.yml up -d
+#   3. In wacrm's .env.local (or your host's env vars), set:
+#        EVOLUTION_API_GLOBAL_URL=https://<this-host>:8080
+#        EVOLUTION_API_GLOBAL_KEY=<same value as AUTHENTICATION_API_KEY>
+#      Evolution must be reachable from wacrm, and wacrm's own public
+#      URL (NEXT_PUBLIC_SITE_URL) must be reachable from Evolution —
+#      the webhook it calls back into is
+#      `${NEXT_PUBLIC_SITE_URL}/api/whatsapp/evolution-webhook/<instance>`.
+#
+# Not tied to any specific host — run this on the same VPS as wacrm
+# (as a separate container) or on its own box; either works as long as
+# the two can reach each other over the network.
+# ============================================================
+
+services:
+  evolution-api:
+    image: atendai/evolution-api:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_URL=http://localhost:8080
+      # Admin/global API key — required for instance management calls
+      # (/instance/create, etc). Distinct from the per-instance key
+      # Evolution generates for each connected number.
+      - AUTHENTICATION_API_KEY=change-me-to-a-long-random-string
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      # Persist sessions in Postgres so a container restart doesn't
+      # force every connected number to re-scan its QR code.
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution@evolution-db:5432/evolution
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      # Redis cache is optional but recommended once you have more
+      # than a handful of instances.
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://evolution-redis:6379/1
+      - CACHE_LOCAL_ENABLED=false
+    volumes:
+      - evolution_instances:/evolution/instances
+    depends_on:
+      - evolution-db
+      - evolution-redis
+
+  evolution-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=evolution
+      - POSTGRES_DB=evolution
+    volumes:
+      - evolution_db_data:/var/lib/postgresql/data
+
+  evolution-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - evolution_redis_data:/data
+
+volumes:
+  evolution_instances:
+  evolution_db_data:
+  evolution_redis_data:

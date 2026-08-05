@@ -47,6 +47,65 @@ function supabaseAdmin() {
   return _adminClient
 }
 
+interface EvolutionConfigRow {
+  evolution_instance_name: string | null
+  evolution_base_url: string | null
+  evolution_api_key: string | null
+}
+
+/**
+ * Evolution-flavoured equivalent of the Meta `verifyPhoneNumber` check
+ * below — asks the Evolution API instance directly whether this number
+ * is actually logged in (`open`), rather than trusting our locally
+ * cached `status` column (which only updates via the `connection.update`
+ * webhook and can drift if that webhook was ever missed).
+ */
+async function checkEvolutionConnection(config: EvolutionConfigRow) {
+  if (!config.evolution_instance_name || !config.evolution_base_url) {
+    return NextResponse.json(
+      {
+        connected: false,
+        reason: 'no_config',
+        message: 'Evolution API connection is missing its instance name or base URL.',
+      },
+      { status: 200 },
+    )
+  }
+  try {
+    const apiKey = config.evolution_api_key ? decrypt(config.evolution_api_key) : ''
+    const response = await fetch(
+      `${config.evolution_base_url}/instance/connectionState/${config.evolution_instance_name}`,
+      { headers: apiKey ? { apikey: apiKey } : {} },
+    )
+    if (!response.ok) {
+      throw new Error(`Evolution API error: ${response.status}`)
+    }
+    const data = (await response.json()) as { instance?: { state?: string } }
+    const state = data.instance?.state
+    if (state === 'open') {
+      return NextResponse.json({
+        connected: true,
+        phone_info: { instance_name: config.evolution_instance_name },
+      })
+    }
+    return NextResponse.json(
+      {
+        connected: false,
+        reason: 'evolution_not_connected',
+        message: `Instance state is "${state ?? 'unknown'}" — scan the QR code again from Settings.`,
+      },
+      { status: 200 },
+    )
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown Evolution API error'
+    console.error('[whatsapp/config GET] Evolution API check failed:', message)
+    return NextResponse.json(
+      { connected: false, reason: 'evolution_api_error', message },
+      { status: 200 },
+    )
+  }
+}
+
 /**
  * GET /api/whatsapp/config
  *
@@ -87,7 +146,9 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
+      .select(
+        'provider, phone_number_id, access_token, status, evolution_instance_name, evolution_base_url, evolution_api_key',
+      )
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -108,6 +169,10 @@ export async function GET() {
         },
         { status: 200 }
       )
+    }
+
+    if (config.provider === 'evolution') {
+      return checkEvolutionConnection(config)
     }
 
     // Try to decrypt the stored token with the current ENCRYPTION_KEY.

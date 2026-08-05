@@ -18,8 +18,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
-import { decrypt } from '@/lib/whatsapp/encryption';
+import { providerFromConfig } from '@/lib/whatsapp/providers/factory';
+import type { IWhatsAppProvider } from '@/lib/whatsapp/providers/types';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -66,8 +66,7 @@ export interface BroadcastPlan {
   broadcastId: string;
   templateName: string;
   templateLanguage: string;
-  phoneNumberId: string;
-  accessToken: string;
+  provider: IWhatsAppProvider;
   templateRow: MessageTemplate | null;
   planned: PlannedRecipient[];
   /** Phones rejected up front (invalid E.164) — counted as failed. */
@@ -110,7 +109,7 @@ export async function createBroadcast(
   }
 
   // Config (fail fast + provides the audit trail owner already resolved
-  // by the caller). Meta send needs phone_number_id + decrypted token.
+  // by the caller).
   const { data: config, error: configError } = await db
     .from('whatsapp_config')
     .select('*')
@@ -123,7 +122,16 @@ export async function createBroadcast(
       400
     );
   }
-  const accessToken = decrypt(config.access_token);
+  let provider: IWhatsAppProvider;
+  try {
+    provider = providerFromConfig(config);
+  } catch (err) {
+    throw new BroadcastError(
+      'whatsapp_not_configured',
+      err instanceof Error ? err.message : 'WhatsApp connection is misconfigured.',
+      400
+    );
+  }
 
   // Template row (once) for header/button components; guard a
   // malformed local row rather than N identical opaque failures.
@@ -238,8 +246,7 @@ export async function createBroadcast(
     broadcastId: broadcast.id,
     templateName,
     templateLanguage,
-    phoneNumberId: config.phone_number_id,
-    accessToken,
+    provider,
     templateRow,
     planned,
     rejected,
@@ -272,9 +279,7 @@ export async function deliverBroadcast(
 
     for (const variant of variants) {
       try {
-        const result = await sendTemplateMessage({
-          phoneNumberId: plan.phoneNumberId,
-          accessToken: plan.accessToken,
+        const result = await plan.provider.sendTemplate({
           to: variant,
           templateName: plan.templateName,
           language: plan.templateLanguage,

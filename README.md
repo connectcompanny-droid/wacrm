@@ -25,7 +25,10 @@ clone or fork it to run your own CRM.
 
 - **Shared inbox** on the official WhatsApp Business API — multiple
   agents working one number, per-conversation assignment, status, and
-  notes.
+  notes. Optionally connect a number by **scanning a QR code** instead,
+  via a self-hosted [Evolution API](#evolution-api-qr-code-connection--optional)
+  instance — no Meta app, WABA, or business verification required
+  ([tradeoffs below](#evolution-api-qr-code-connection--optional)).
 - **Contacts + tags + custom fields**, CSV import, deduplication.
 - **Sales pipelines** (Kanban) with deals linked to conversations.
 - **Broadcasts** with Meta-approved templates, delivery + read
@@ -136,6 +139,52 @@ Full walkthrough with screenshots:
 > (Vercel, Railway, your own VPS). Hostinger is recommended, not
 > required._
 
+## Evolution API (QR code) connection — optional
+
+By default wacrm talks to the official **Meta WhatsApp Cloud API**,
+which requires a Meta app, a WhatsApp Business Account, and (for
+production numbers) business verification. As an alternative, wacrm
+can also connect a number through a self-hosted
+**[Evolution API](https://doc.evolution-api.com/)** instance — you
+scan a QR code with WhatsApp on your phone, the same way you'd link
+WhatsApp Web, and no Meta onboarding is needed.
+
+**Read this before using it:**
+
+- Evolution API wraps [Baileys](https://github.com/WhiskeySockets/Baileys),
+  an *unofficial* client that connects the same way WhatsApp Web does.
+  It is **not** Meta's Business API. Using it may violate WhatsApp's
+  Terms of Service, and carries a real risk of the connected number
+  being banned — especially with high message volume or broadcasts.
+  Treat it as suitable for testing, personal use, or low-volume
+  scenarios, not as a drop-in replacement for the official API in
+  production.
+- There's no 24-hour customer-service-window restriction and no
+  template-approval flow — but that also means the "Templates" and
+  "Broadcasts" features degrade to sending plain rendered text when a
+  number is connected this way, rather than Meta-approved templates.
+- You must run your own Evolution API instance — wacrm doesn't bundle
+  or manage one. See [docker-compose.evolution.yml](./docker-compose.evolution.yml)
+  for a ready-to-edit compose file (run it on the same host as wacrm,
+  or anywhere reachable from it).
+
+**Setup:**
+
+1. Deploy Evolution API (`docker compose -f docker-compose.evolution.yml up -d`,
+   after setting a real `AUTHENTICATION_API_KEY` in that file).
+2. Set `EVOLUTION_API_GLOBAL_URL` and `EVOLUTION_API_GLOBAL_KEY` in
+   wacrm's env vars (see `.env.local.example`), plus `NEXT_PUBLIC_SITE_URL`
+   pointing at your wacrm deployment — Evolution calls back into
+   `${NEXT_PUBLIC_SITE_URL}/api/whatsapp/evolution-webhook/<instance>`.
+3. In wacrm, go to **Settings → WhatsApp connection**, switch to
+   **QR Code (Evolution API)**, and click **Generate QR Code**. Scan it
+   from your phone: WhatsApp → Settings → Linked Devices → Link a
+   Device.
+
+Both connection methods share the same inbox, contacts, pipelines, and
+automations — only how the number is *connected* differs. An account
+can use one or the other, not both at once.
+
 ## Documentation
 
 Full self-host documentation — Supabase migrations, WhatsApp Business
@@ -156,7 +205,9 @@ Key pages:
 
 - **App** — Next.js 16 (App Router), React 19, TypeScript, Tailwind v4.
 - **Data** — Supabase (Postgres + Auth + Storage + RLS).
-- **WhatsApp** — Meta Cloud API (official WhatsApp Business API).
+- **WhatsApp** — Meta Cloud API (official WhatsApp Business API), or
+  optionally a self-hosted [Evolution API](#evolution-api-qr-code-connection--optional)
+  instance for QR-code connection (unofficial).
 
 ## Contributing
 

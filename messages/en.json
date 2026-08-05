@@ -1491,7 +1491,22 @@
       "step4_3": "Paste the <strong class=\"text-foreground\">Webhook Callback URL</strong> from above",
       "step4_4": "Enter the same <strong class=\"text-foreground\">Verify Token</strong> you set here",
       "step4_5": "Subscribe to \"messages\" webhook field",
-      "metaDocs": "Meta WhatsApp API Documentation"
+      "metaDocs": "Meta WhatsApp API Documentation",
+      "connectionMethod": "Connection method",
+      "methodMeta": "Official Meta API",
+      "methodMetaDesc": "Requires a Meta app, WhatsApp Business Account, and (for production numbers) business verification.",
+      "methodEvolution": "QR Code (Evolution API)",
+      "methodEvolutionDesc": "Scan a QR code with your phone — no Meta app or business verification. Requires a self-hosted Evolution API server.",
+      "qrTitle": "Connect via QR Code",
+      "qrDesc": "Scan this code with WhatsApp on your phone: Settings → Linked Devices → Link a Device.",
+      "qrGenerate": "Generate QR Code",
+      "qrGenerating": "Generating...",
+      "qrRefresh": "Refresh QR Code",
+      "qrWaitingForScan": "Waiting for scan...",
+      "qrConnected": "Connected via Evolution API",
+      "qrInstanceLabel": "Instance",
+      "qrDisclaimer": "Evolution API is an unofficial WhatsApp connection (it simulates WhatsApp Web, not Meta's Business API). This may violate WhatsApp's Terms of Service and carries a real risk of the number being banned — especially for bulk sending. Recommended for testing or low-volume use only.",
+      "qrNotConfigured": "This wacrm deployment hasn't configured an Evolution API server. Ask your administrator to set EVOLUTION_API_GLOBAL_URL and EVOLUTION_API_GLOBAL_KEY (see README)."
     },
     "sections": {
       "overview": "Overview",
