@@ -218,20 +218,51 @@ export async function POST() {
       )
     }
 
-    // QR may already be in the create response; otherwise fetch it.
-    let qrBase64 = created.qrcode?.base64 ?? null
-    if (!qrBase64) {
-      const connect = await evolutionFetch<ConnectResponse>(
+    // If the instance is already logged in (the common case when this
+    // POST is a "resync the webhook config" call from an already-
+    // connected Settings page, not a first-time connect), Evolution
+    // won't return a QR at all — asking for one is meaningless once
+    // authenticated. Check first so that case is a clean success
+    // response instead of the "no QR returned" error below.
+    let alreadyConnected = false
+    try {
+      const state = await evolutionFetch<{ instance?: { state?: string } }>(
         globalConfig.baseUrl,
-        `/instance/connect/${instanceName}`,
+        `/instance/connectionState/${instanceName}`,
         { method: 'GET', apiKey: instanceApiKey ?? globalConfig.apiKey },
       )
-      qrBase64 = connect.base64 ?? null
+      alreadyConnected = state.instance?.state === 'open'
+    } catch (err) {
+      // Instance genuinely brand new (never connected) — connectionState
+      // may 404 here on some Evolution versions. Fall through to the QR
+      // flow below, which is the correct path for that case anyway.
+      console.warn(
+        '[evolution/instance] connectionState check failed (treating as not-yet-connected):',
+        err instanceof Error ? err.message : err,
+      )
+    }
+
+    let qrBase64: string | null = null
+    if (!alreadyConnected) {
+      // QR may already be in the create response; otherwise fetch it.
+      qrBase64 = created.qrcode?.base64 ?? null
+      if (!qrBase64) {
+        const connect = await evolutionFetch<ConnectResponse>(
+          globalConfig.baseUrl,
+          `/instance/connect/${instanceName}`,
+          { method: 'GET', apiKey: instanceApiKey ?? globalConfig.apiKey },
+        )
+        qrBase64 = connect.base64 ?? null
+      }
     }
 
     // Persist the connection row. Same account_id-keyed upsert pattern
     // as the Meta config route. `existing` was already fetched above
-    // (before deciding whether to call /instance/create).
+    // (before deciding whether to call /instance/create). Only clobber
+    // status/connected_at when we have fresh evidence either way —
+    // `alreadyConnected` (a live check we just made) or a first-time
+    // create (definitely not connected yet); don't blindly stamp
+    // 'disconnected' over a row that's actually still live.
     const row = {
       provider: 'evolution' as const,
       evolution_instance_name: instanceName,
@@ -239,8 +270,8 @@ export async function POST() {
         created.instance?.instanceId ?? (reusingInstance ? existing?.evolution_instance_id ?? null : null),
       evolution_base_url: globalConfig.baseUrl,
       evolution_api_key: instanceApiKey ? encrypt(instanceApiKey) : null,
-      status: 'disconnected' as const,
-      connected_at: null,
+      status: alreadyConnected ? ('connected' as const) : ('disconnected' as const),
+      connected_at: alreadyConnected ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
     }
 
@@ -263,6 +294,13 @@ export async function POST() {
         console.error('[evolution/instance] insert failed:', insertError)
         return NextResponse.json({ error: 'Failed to save connection' }, { status: 500 })
       }
+    }
+
+    if (alreadyConnected) {
+      return NextResponse.json({
+        instance_name: instanceName,
+        already_connected: true,
+      })
     }
 
     if (!qrBase64) {

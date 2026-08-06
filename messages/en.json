@@ -1504,6 +1504,7 @@
       "qrRefresh": "Refresh QR Code",
       "qrWaitingForScan": "Waiting for scan...",
       "qrConnected": "Connected via Evolution API",
+      "qrResync": "Resync webhook",
       "qrInstanceLabel": "Instance",
       "qrDisclaimer": "Evolution API is an unofficial WhatsApp connection (it simulates WhatsApp Web, not Meta's Business API). This may violate WhatsApp's Terms of Service and carries a real risk of the number being banned — especially for bulk sending. Recommended for testing or low-volume use only.",
       "qrNotConfigured": "This wacrm deployment hasn't configured an Evolution API server. Ask your administrator to set EVOLUTION_API_GLOBAL_URL and EVOLUTION_API_GLOBAL_KEY (see README)."

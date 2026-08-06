@@ -329,8 +329,17 @@ export function WhatsAppConfig() {
         toast.error(data.error || 'Failed to generate QR code');
         return;
       }
-      setQrCode(data.qrcode_base64);
       setEvolutionInstanceName(data.instance_name);
+      if (data.already_connected) {
+        // Instance was already logged in — this call was a webhook
+        // resync (e.g. to pick up a new event/config), not a first
+        // connect. There's no QR to show; just confirm and refresh.
+        setQrCode(null);
+        setConnectionStatus('connected');
+        toast.success('Connection re-synced.');
+        return;
+      }
+      setQrCode(data.qrcode_base64);
       setConnectionStatus('disconnected');
     } catch (err) {
       console.error('Generate QR error:', err);
@@ -815,9 +824,25 @@ export function WhatsAppConfig() {
             </Alert>
 
             {connectionStatus === 'connected' ? (
-              <div className="flex items-center gap-2 text-emerald-400 text-sm">
-                <CheckCircle2 className="size-4" />
-                {t('qrConnected')}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-emerald-400 text-sm">
+                  <CheckCircle2 className="size-4" />
+                  {t('qrConnected')}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleGenerateQr}
+                  disabled={qrLoading}
+                  className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+                >
+                  {qrLoading ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="size-3.5" />
+                  )}
+                  {t('qrResync')}
+                </Button>
               </div>
             ) : qrCode ? (
               <div className="flex flex-col items-center gap-3">
