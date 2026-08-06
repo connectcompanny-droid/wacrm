@@ -201,6 +201,13 @@ export async function POST() {
             enabled: true,
             url: `${process.env.NEXT_PUBLIC_SITE_URL}/api/whatsapp/evolution-webhook/${instanceName}`,
             events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
+            // Without this, inbound media (image/video/document/audio)
+            // messages carry no retrievable file — Evolution reports
+            // the message but not its decrypted bytes, and the
+            // webhook route has nothing to upload/display. With it,
+            // the media's decoded bytes ride along in the webhook
+            // payload (see resolveMediaUrl in the webhook route).
+            webhookBase64: true,
           },
         }),
       })

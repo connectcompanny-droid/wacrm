@@ -1,11 +1,20 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { uploadAccountMediaServer } from '@/lib/storage/upload-media-server'
 import {
   processNormalizedInboundMessage,
   ALLOWED_CONTENT_TYPES,
   type NormalizedInboundMessage,
 } from '@/lib/whatsapp/inbound-pipeline'
+
+// Same bucket the inbox composer uploads outbound attachments to
+// (CHAT_MEDIA_BUCKET in src/components/inbox/message-composer.tsx).
+// Kept as a literal here rather than importing that constant — it
+// lives in a 'use client' component file, and importing from there
+// into a server route is best avoided even though the value itself is
+// just a string.
+const CHAT_MEDIA_BUCKET = 'chat-media'
 
 /**
  * Webhook receiver for a self-hosted Evolution API instance.
@@ -58,16 +67,29 @@ interface EvolutionContextInfo {
 interface EvolutionMessageContent {
   conversation?: string
   extendedTextMessage?: { text: string; contextInfo?: EvolutionContextInfo }
-  imageMessage?: { caption?: string; contextInfo?: EvolutionContextInfo }
-  videoMessage?: { caption?: string; contextInfo?: EvolutionContextInfo }
-  documentMessage?: { caption?: string; fileName?: string; contextInfo?: EvolutionContextInfo }
-  audioMessage?: { contextInfo?: EvolutionContextInfo }
+  imageMessage?: { caption?: string; mimetype?: string; contextInfo?: EvolutionContextInfo }
+  videoMessage?: { caption?: string; mimetype?: string; contextInfo?: EvolutionContextInfo }
+  documentMessage?: {
+    caption?: string
+    fileName?: string
+    mimetype?: string
+    contextInfo?: EvolutionContextInfo
+  }
+  audioMessage?: { mimetype?: string; contextInfo?: EvolutionContextInfo }
   locationMessage?: { degreesLatitude: number; degreesLongitude: number; name?: string; address?: string }
   buttonsResponseMessage?: { selectedButtonId: string; selectedDisplayText?: string }
   listResponseMessage?: {
     singleSelectReply?: { selectedRowId: string }
     title?: string
   }
+  /**
+   * Present only when the instance's webhook is configured with
+   * `webhookBase64: true` (set in POST /api/whatsapp/evolution/instance
+   * when registering the webhook) — the media file's bytes, already
+   * decrypted by Evolution, as base64. Without it, media messages
+   * persist with `mediaUrl: null` — see `resolveMediaUrl` below.
+   */
+  base64?: string
 }
 
 interface EvolutionUpsertData {
@@ -76,6 +98,8 @@ interface EvolutionUpsertData {
   message?: EvolutionMessageContent
   messageType?: string
   messageTimestamp?: number
+  /** Some Evolution versions put the base64 payload here instead of on `message`. */
+  base64?: string
 }
 
 interface EvolutionConnectionUpdateData {
@@ -96,25 +120,78 @@ function jidToPhone(remoteJid: string): string | null {
   return id
 }
 
+const EXTENSION_BY_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'video/mp4': 'mp4',
+  'video/3gpp': '3gp',
+  'audio/ogg': 'ogg',
+  'audio/ogg; codecs=opus': 'ogg',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'application/pdf': 'pdf',
+}
+
+function extensionFromMime(mime: string | undefined, fallback: string): string {
+  if (!mime) return fallback
+  return EXTENSION_BY_MIME[mime] ?? mime.split('/')[1]?.split(';')[0] ?? fallback
+}
+
+/**
+ * Decode+upload a media message's base64 payload (present only when
+ * the instance's webhook was registered with `webhookBase64: true` —
+ * see POST /api/whatsapp/evolution/instance) to the same Storage
+ * bucket outbound composer attachments use, and return its public URL.
+ *
+ * Returns null (not a throw) on any failure or when no base64 payload
+ * is present at all — inbound processing degrades to a text-only
+ * bubble rather than dropping the whole message over a media hiccup.
+ */
+async function resolveMediaUrl(
+  accountId: string,
+  externalId: string,
+  base64: string | undefined,
+  mimetype: string | undefined,
+  fileNameHint: string | undefined,
+  fallbackExt: string,
+): Promise<string | null> {
+  if (!base64) return null
+  try {
+    const bytes = Buffer.from(base64, 'base64')
+    const ext = extensionFromMime(mimetype, fallbackExt)
+    const fileName = fileNameHint || `${externalId}.${ext}`
+    return await uploadAccountMediaServer(
+      CHAT_MEDIA_BUCKET,
+      accountId,
+      fileName,
+      bytes,
+      mimetype || 'application/octet-stream',
+    )
+  } catch (err) {
+    console.error('[evolution-webhook] media upload failed:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
+
 /**
  * Map one Baileys/Evolution message envelope to our normalized shape.
  * Returns null for message types we don't (yet) support persisting.
- *
- * Media note: full media download requires fetching + decrypting the
- * WhatsApp-hosted blob with Baileys' media key, which Evolution may or
- * may not surface directly depending on its `webhook_base64` setting.
- * That's not implemented here — media messages persist with a text
- * placeholder and `mediaUrl: null` rather than a broken/empty bubble.
- * Wiring real media requires either enabling Evolution's base64 webhook
- * payload and uploading the bytes to Supabase Storage, or calling
- * Evolution's `GET /chat/getBase64/{instance}` endpoint after the fact.
  */
-function normalizeUpsertMessage(data: EvolutionUpsertData): NormalizedInboundMessage | null {
+async function normalizeUpsertMessage(
+  data: EvolutionUpsertData,
+  accountId: string,
+): Promise<NormalizedInboundMessage | null> {
   if (data.key.fromMe) return null // echo of our own send — see route doc comment
   const fromPhone = jidToPhone(data.key.remoteJid)
   if (!fromPhone) return null // group/broadcast — not supported yet
 
   const msg = data.message ?? {}
+  // Some Evolution versions put the decoded base64 on `data.base64`,
+  // others nest it under `data.message.base64` (or under the specific
+  // `*Message` object) — check the plausible spots defensively.
+  const rawBase64 = data.base64 ?? msg.base64
   const timestampMs = (data.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000
   const base = {
     externalId: data.key.id,
@@ -148,7 +225,14 @@ function normalizeUpsertMessage(data: EvolutionUpsertData): NormalizedInboundMes
       ...base,
       contentType: 'image',
       contentText: msg.imageMessage.caption || null,
-      mediaUrl: null,
+      mediaUrl: await resolveMediaUrl(
+        accountId,
+        base.externalId,
+        rawBase64,
+        msg.imageMessage.mimetype,
+        undefined,
+        'jpg',
+      ),
       interactiveReplyId: null,
       replyToExternalId: msg.imageMessage.contextInfo?.stanzaId ?? null,
     }
@@ -158,7 +242,14 @@ function normalizeUpsertMessage(data: EvolutionUpsertData): NormalizedInboundMes
       ...base,
       contentType: 'video',
       contentText: msg.videoMessage.caption || null,
-      mediaUrl: null,
+      mediaUrl: await resolveMediaUrl(
+        accountId,
+        base.externalId,
+        rawBase64,
+        msg.videoMessage.mimetype,
+        undefined,
+        'mp4',
+      ),
       interactiveReplyId: null,
       replyToExternalId: msg.videoMessage.contextInfo?.stanzaId ?? null,
     }
@@ -168,7 +259,14 @@ function normalizeUpsertMessage(data: EvolutionUpsertData): NormalizedInboundMes
       ...base,
       contentType: 'document',
       contentText: msg.documentMessage.caption || msg.documentMessage.fileName || null,
-      mediaUrl: null,
+      mediaUrl: await resolveMediaUrl(
+        accountId,
+        base.externalId,
+        rawBase64,
+        msg.documentMessage.mimetype,
+        msg.documentMessage.fileName,
+        'bin',
+      ),
       interactiveReplyId: null,
       replyToExternalId: msg.documentMessage.contextInfo?.stanzaId ?? null,
     }
@@ -178,7 +276,14 @@ function normalizeUpsertMessage(data: EvolutionUpsertData): NormalizedInboundMes
       ...base,
       contentType: 'audio',
       contentText: null,
-      mediaUrl: null,
+      mediaUrl: await resolveMediaUrl(
+        accountId,
+        base.externalId,
+        rawBase64,
+        msg.audioMessage.mimetype,
+        undefined,
+        'ogg',
+      ),
       interactiveReplyId: null,
       replyToExternalId: msg.audioMessage.contextInfo?.stanzaId ?? null,
     }
@@ -263,7 +368,7 @@ async function processEvolutionWebhook(instanceName: string, body: EvolutionWebh
 
   const rawMessages = Array.isArray(body.data) ? body.data : body.data ? [body.data] : []
   for (const raw of rawMessages as EvolutionUpsertData[]) {
-    const normalized = normalizeUpsertMessage(raw)
+    const normalized = await normalizeUpsertMessage(raw, config.account_id)
     if (!normalized) continue
     // Defensive: even though the interface promises a narrowed union,
     // messages.upsert type mapping only ever produces values from
