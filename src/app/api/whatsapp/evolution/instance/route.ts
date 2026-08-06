@@ -138,37 +138,57 @@ export async function POST() {
 
     const instanceName = instanceNameForAccount(accountId)
 
-    let created: CreateInstanceResponse
-    try {
-      created = await evolutionFetch<CreateInstanceResponse>(
-        globalConfig.baseUrl,
-        '/instance/create',
-        {
-          method: 'POST',
-          apiKey: globalConfig.apiKey,
-          body: JSON.stringify({
-            instanceName,
-            qrcode: true,
-            integration: 'WHATSAPP-BAILEYS',
-          }),
-        },
-      )
-    } catch (err) {
-      // Instance may already exist from a previous connect attempt —
-      // fall through to /instance/connect below instead of failing.
-      const message = err instanceof Error ? err.message : String(err)
-      if (!/already.*(exists|in use)/i.test(message)) {
+    // Look up any connection already saved for this account BEFORE
+    // touching Evolution. `instanceNameForAccount` is deterministic, so
+    // a second "Generate QR Code" click (QR expired, user re-opened
+    // Settings, etc.) would otherwise call /instance/create again for a
+    // name that already exists. Different Evolution versions signal
+    // that differently — some return a friendly "already exists"
+    // message, others a bare 403 Forbidden — which made string-matching
+    // the error fragile. Simplest robust fix: if we already have a
+    // saved instance for this account, skip /instance/create entirely
+    // and go straight to /instance/connect (same as the GET handler),
+    // reusing the previously-stored per-instance API key.
+    const { data: existing } = await supabase
+      .from('whatsapp_config')
+      .select('id, provider, evolution_instance_name, evolution_instance_id, evolution_api_key')
+      .eq('account_id', accountId)
+      .maybeSingle()
+
+    const reusingInstance =
+      existing?.provider === 'evolution' && existing.evolution_instance_name === instanceName
+
+    let created: CreateInstanceResponse = {}
+    let instanceApiKey: string | undefined = reusingInstance && existing?.evolution_api_key
+      ? decrypt(existing.evolution_api_key)
+      : undefined
+
+    if (!reusingInstance) {
+      try {
+        created = await evolutionFetch<CreateInstanceResponse>(
+          globalConfig.baseUrl,
+          '/instance/create',
+          {
+            method: 'POST',
+            apiKey: globalConfig.apiKey,
+            body: JSON.stringify({
+              instanceName,
+              qrcode: true,
+              integration: 'WHATSAPP-BAILEYS',
+            }),
+          },
+        )
+        instanceApiKey =
+          typeof created.hash === 'string' ? created.hash : created.hash?.apikey
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
         console.error('[evolution/instance] create failed:', message)
         return NextResponse.json(
           { error: `Evolution API error creating instance: ${message}` },
           { status: 502 },
         )
       }
-      created = {}
     }
-
-    const instanceApiKey =
-      typeof created.hash === 'string' ? created.hash : created.hash?.apikey
 
     // Register (or re-register) this instance's webhook to point at our
     // Evolution webhook route — idempotent on Evolution's side.
@@ -203,17 +223,13 @@ export async function POST() {
     }
 
     // Persist the connection row. Same account_id-keyed upsert pattern
-    // as the Meta config route.
-    const { data: existing } = await supabase
-      .from('whatsapp_config')
-      .select('id')
-      .eq('account_id', accountId)
-      .maybeSingle()
-
+    // as the Meta config route. `existing` was already fetched above
+    // (before deciding whether to call /instance/create).
     const row = {
       provider: 'evolution' as const,
       evolution_instance_name: instanceName,
-      evolution_instance_id: created.instance?.instanceId ?? null,
+      evolution_instance_id:
+        created.instance?.instanceId ?? (reusingInstance ? existing?.evolution_instance_id ?? null : null),
       evolution_base_url: globalConfig.baseUrl,
       evolution_api_key: instanceApiKey ? encrypt(instanceApiKey) : null,
       status: 'disconnected' as const,
