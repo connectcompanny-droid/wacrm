@@ -168,34 +168,26 @@ export default function InboxPage() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      const user = session?.user;
+      if (!session?.user) return;
 
-      if (!user) return;
-
-      // whatsapp_config is one-row-per-account post-multi-user, so
-      // the previous `.eq('user_id', user.id)` would miss the row
-      // for any teammate who didn't personally save the config —
-      // the "WhatsApp not connected" banner would show in the
-      // shared inbox even though the admin had it configured.
-      // Resolve account_id via the profile and query by that.
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("account_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      const accountId = profile?.account_id as string | undefined;
-      if (!accountId) {
+      // Same live check the Settings page uses (GET /api/whatsapp/config)
+      // — pings the actual provider (Meta's API, or Evolution's
+      // connectionState endpoint) instead of trusting the cached
+      // `whatsapp_config.status` column. That column only updates via
+      // provider webhooks (connection.update for Evolution, /register
+      // for Meta), so a missed webhook — or a connection made before a
+      // webhook-delivery bug was fixed — left this banner stuck on
+      // "not connected" even once messages were flowing fine. The API
+      // route already resolves account_id server-side, so no need to
+      // look up the profile here too.
+      try {
+        const res = await fetch("/api/whatsapp/config", { method: "GET" });
+        const payload = await res.json();
+        setWhatsappConnected(Boolean(payload.connected));
+      } catch (err) {
+        console.error("WhatsApp connection check failed:", err);
         setWhatsappConnected(false);
-        return;
       }
-
-      const { data } = await supabase
-        .from("whatsapp_config")
-        .select("status")
-        .eq("account_id", accountId)
-        .maybeSingle();
-
-      setWhatsappConnected(data?.status === "connected");
     };
 
     checkConnection();
