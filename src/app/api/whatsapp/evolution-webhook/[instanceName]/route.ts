@@ -192,6 +192,28 @@ async function normalizeUpsertMessage(
   // others nest it under `data.message.base64` (or under the specific
   // `*Message` object) — check the plausible spots defensively.
   const rawBase64 = data.base64 ?? msg.base64
+  // TEMPORARY diagnostic — remove once the real base64 field location is
+  // confirmed against a live payload. Logs shape only (key names, whether
+  // a base64 string was found, its length) — never the actual bytes/text.
+  if (msg.imageMessage || msg.videoMessage || msg.documentMessage || msg.audioMessage) {
+    const mediaKey = msg.imageMessage
+      ? 'imageMessage'
+      : msg.videoMessage
+        ? 'videoMessage'
+        : msg.documentMessage
+          ? 'documentMessage'
+          : 'audioMessage'
+    console.log('[evolution-webhook] media message debug:', {
+      mediaKey,
+      dataKeys: Object.keys(data),
+      messageKeys: Object.keys(msg),
+      mediaObjectKeys: Object.keys(
+        (msg as unknown as Record<string, Record<string, unknown>>)[mediaKey] ?? {},
+      ),
+      foundBase64: typeof rawBase64 === 'string',
+      base64Length: typeof rawBase64 === 'string' ? rawBase64.length : 0,
+    })
+  }
   const timestampMs = (data.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000
   const base = {
     externalId: data.key.id,
