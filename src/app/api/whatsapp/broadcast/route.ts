@@ -149,7 +149,15 @@ export async function POST(request: Request) {
       )
     }
 
-    const provider = providerFromConfig(config)
+    let provider
+    try {
+      provider = providerFromConfig(config)
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : 'WhatsApp connection is misconfigured' },
+        { status: 400 },
+      )
+    }
 
     // Load the template row once so sendTemplateMessage can build
     // header + button components on each iteration. Loading inside

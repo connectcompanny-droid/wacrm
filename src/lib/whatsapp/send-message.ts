@@ -325,7 +325,20 @@ export async function sendMessageToConversation(
     templateRow = data ?? null;
   }
 
-  const provider = providerFromConfig(config);
+  let provider: ReturnType<typeof providerFromConfig>;
+  try {
+    provider = providerFromConfig(config);
+  } catch (err) {
+    // providerFromConfig throws ProviderConfigError (missing/invalid
+    // fields for the row's provider) or, if a guard was missed
+    // somewhere, whatever decrypt() throws. Either way, surface it as
+    // a proper SendMessageError instead of letting a raw exception
+    // escape unformatted (which the route's catch-all was turning into
+    // an opaque generic 500 with no detail — see [send/route.ts]).
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[send-message] providerFromConfig failed:', message);
+    throw new SendMessageError('whatsapp_not_configured', message, 400);
+  }
 
   const attempt = async (phone: string): Promise<string> => {
     if (messageType === 'template') {

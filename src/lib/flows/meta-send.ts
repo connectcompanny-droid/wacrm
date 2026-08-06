@@ -87,7 +87,12 @@ export async function engineSendText(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const provider = providerFromConfig(config)
+  let provider: ReturnType<typeof providerFromConfig>
+  try {
+    provider = providerFromConfig(config)
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : 'WhatsApp connection is misconfigured')
+  }
 
   const attempt = async (phone: string): Promise<string> => {
     const r = await provider.sendText({
@@ -195,7 +200,12 @@ export async function engineSendMedia(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const provider = providerFromConfig(config)
+  let provider: ReturnType<typeof providerFromConfig>
+  try {
+    provider = providerFromConfig(config)
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : 'WhatsApp connection is misconfigured')
+  }
 
   const attempt = async (phone: string): Promise<string> => {
     const r = await provider.sendMedia({
@@ -345,7 +355,12 @@ async function sendInteractiveViaMeta(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const provider = providerFromConfig(config)
+  let provider: ReturnType<typeof providerFromConfig>
+  try {
+    provider = providerFromConfig(config)
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : 'WhatsApp connection is misconfigured')
+  }
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'buttons') {

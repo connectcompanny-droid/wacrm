@@ -48,6 +48,19 @@ export function encrypt(text: string): string {
 }
 
 export function decrypt(encryptedText: string): string {
+  // Every call site is expected to guard against a NULL/empty DB column
+  // before calling decrypt() — but a native `TypeError: Cannot read
+  // properties of null (reading 'split')` gives zero clue about which
+  // guard was missed or which column was empty. Fail with a message
+  // that says exactly that instead, so the next occurrence (anywhere —
+  // this function has 15+ call sites across Meta tokens, Evolution API
+  // keys, AI provider keys, webhook secrets) is instantly diagnosable
+  // from the server log alone.
+  if (!encryptedText) {
+    throw new Error(
+      'decrypt() called with a null/empty value — the caller should have checked the column was set before calling decrypt().',
+    )
+  }
   const parts = encryptedText.split(':')
 
   if (parts.length === 3) {
