@@ -43,6 +43,20 @@ function instanceNameForAccount(accountId: string): string {
   return `wacrm-${accountId}`
 }
 
+/**
+ * Evolution API's `qrcode.base64` / `/instance/connect` `base64` field
+ * comes back as a full data URI (`data:image/png;base64,<data>`), not
+ * bare base64 — despite the field name. Strip it here so this route's
+ * `qrcode_base64` response is always the raw base64 payload; the
+ * frontend prepends its own `data:image/png;base64,` prefix when
+ * building the `<img src>`, and stacking both produced a corrupted,
+ * unrenderable data URI.
+ */
+function stripDataUriPrefix(value: string): string {
+  const match = value.match(/^data:[^;]+;base64,([\s\S]+)$/)
+  return match ? match[1] : value
+}
+
 interface EvolutionErrorResponse {
   message?: string | string[]
   error?: string
@@ -238,7 +252,10 @@ export async function POST() {
       )
     }
 
-    return NextResponse.json({ qrcode_base64: qrBase64, instance_name: instanceName })
+    return NextResponse.json({
+      qrcode_base64: stripDataUriPrefix(qrBase64),
+      instance_name: instanceName,
+    })
   } catch (error) {
     console.error('[evolution/instance] POST failed:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -295,7 +312,10 @@ export async function GET() {
       )
     }
 
-    return NextResponse.json({ qrcode_base64: connect.base64, instance_name: config.evolution_instance_name })
+    return NextResponse.json({
+      qrcode_base64: stripDataUriPrefix(connect.base64),
+      instance_name: config.evolution_instance_name,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error'
     console.error('[evolution/instance] GET failed:', message)
