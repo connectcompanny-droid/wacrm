@@ -65,6 +65,7 @@ async function checkEvolutionConnection(config: EvolutionConfigRow) {
     return NextResponse.json(
       {
         connected: false,
+        provider: 'evolution',
         reason: 'no_config',
         message: 'Evolution API connection is missing its instance name or base URL.',
       },
@@ -85,12 +86,14 @@ async function checkEvolutionConnection(config: EvolutionConfigRow) {
     if (state === 'open') {
       return NextResponse.json({
         connected: true,
+        provider: 'evolution',
         phone_info: { instance_name: config.evolution_instance_name },
       })
     }
     return NextResponse.json(
       {
         connected: false,
+        provider: 'evolution',
         reason: 'evolution_not_connected',
         message: `Instance state is "${state ?? 'unknown'}" — scan the QR code again from Settings.`,
       },
@@ -100,7 +103,7 @@ async function checkEvolutionConnection(config: EvolutionConfigRow) {
     const message = err instanceof Error ? err.message : 'Unknown Evolution API error'
     console.error('[whatsapp/config GET] Evolution API check failed:', message)
     return NextResponse.json(
-      { connected: false, reason: 'evolution_api_error', message },
+      { connected: false, provider: 'evolution', reason: 'evolution_api_error', message },
       { status: 200 },
     )
   }
@@ -200,7 +203,7 @@ export async function GET() {
         phoneNumberId: config.phone_number_id,
         accessToken,
       })
-      return NextResponse.json({ connected: true, phone_info: phoneInfo })
+      return NextResponse.json({ connected: true, phone_info: phoneInfo, provider: 'meta' })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown Meta API error'
       console.error('[whatsapp/config GET] Meta API verification failed:', message)

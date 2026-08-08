@@ -109,6 +109,16 @@ interface MessageThreadProps {
    */
   contactPanelOpen?: boolean;
   onToggleContactPanel?: () => void;
+  /**
+   * Which WhatsApp connection backend this account uses. The 24-hour
+   * customer-service-window rule (`sessionInfo` below) is a Meta Cloud
+   * API restriction — Evolution API (Baileys/WhatsApp Web) has no such
+   * limit, so the composer must not lock up once 24h pass since the
+   * customer's last message on an Evolution-connected account.
+   * Undefined (no config loaded yet, or none saved) defaults to Meta's
+   * stricter behavior — the only provider that actually needs the gate.
+   */
+  whatsappProvider?: "meta" | "evolution";
 }
 
 function formatDateSeparator(dateStr: string, t: ReturnType<typeof useTranslations>): string {
@@ -167,6 +177,7 @@ export function MessageThread({
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
+  whatsappProvider,
 }: MessageThreadProps) {
   const t = useTranslations("Inbox.messageThread");
   const tTimer = useTranslations("Inbox.sessionTimer");
@@ -226,8 +237,11 @@ export function MessageThread({
     };
   }, []);
 
-  // 24-hour session timer
+  // 24-hour session timer — Meta Cloud API only (see whatsappProvider
+  // doc comment on MessageThreadProps). Evolution API connections never
+  // lock the composer on this basis.
   const sessionInfo = useMemo(() => {
+    if (whatsappProvider === "evolution") return { expired: false, remaining: "" };
     if (!messages.length) return { expired: false, remaining: "" };
 
     // Find last customer message
@@ -251,7 +265,7 @@ export function MessageThread({
         : tTimer("xmRemaining", { minutes: Math.floor(hoursLeft * 60) });
 
     return { expired, remaining };
-  }, [messages, tTimer]);
+  }, [messages, tTimer, whatsappProvider]);
 
   // Store latest callback in a ref so fetchMessages doesn't need to
   // depend on `onMessagesLoaded` — otherwise parent re-renders cause

@@ -16,6 +16,17 @@ import {
 // just a string.
 const CHAT_MEDIA_BUCKET = 'chat-media'
 
+// The `after()` callback in POST runs within this route's max duration.
+// Resolving a media message now makes an extra round trip to Evolution
+// (POST /chat/getBase64FromMediaMessage, which itself has to decrypt
+// the file) plus a Supabase Storage upload — comfortably past the
+// platform's default serverless timeout on some plans. Without this,
+// a slow media resolution doesn't just lose the media: it kills the
+// whole background job mid-flight, so the message never gets
+// persisted at all (worse than a text-only fallback bubble). Mirrors
+// src/app/api/whatsapp/webhook/route.ts's identical `maxDuration`.
+export const maxDuration = 60
+
 /**
  * Webhook receiver for a self-hosted Evolution API instance.
  *

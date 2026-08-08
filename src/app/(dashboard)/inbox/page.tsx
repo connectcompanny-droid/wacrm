@@ -40,6 +40,11 @@ export default function InboxPage() {
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
     null
   );
+  // Drives whether MessageThread enforces Meta's 24h customer-service-
+  // window rule — Evolution API connections have no such restriction.
+  const [whatsappProvider, setWhatsappProvider] = useState<
+    "meta" | "evolution" | undefined
+  >(undefined);
   /**
    * Bumped whenever we want children (ConversationList, MessageThread)
    * to refetch from the DB — used as a safety net against missed
@@ -184,6 +189,10 @@ export default function InboxPage() {
         const res = await fetch("/api/whatsapp/config", { method: "GET" });
         const payload = await res.json();
         setWhatsappConnected(Boolean(payload.connected));
+        // 'meta' | 'evolution' | undefined (no config saved yet — the
+        // 24h-session gate below defaults to Meta's stricter behavior
+        // in that case, since that's the only provider that needs it).
+        setWhatsappProvider(payload.provider);
       } catch (err) {
         console.error("WhatsApp connection check failed:", err);
         setWhatsappConnected(false);
@@ -604,6 +613,7 @@ export default function InboxPage() {
             onRefresh={handleManualRefresh}
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
+            whatsappProvider={whatsappProvider}
           />
         </div>
 
